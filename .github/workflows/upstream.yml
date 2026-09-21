@@ -1,0 +1,189 @@
+# Watches upstream openGym for new releases and moves the add-ons onto them.
+#
+# Daily:
+#   1. Read upstream's latest stable release (GitHub, falling back to GitLab).
+#   2. If it's newer than the pinned version, check BOTH images are published
+#      with a linux/arm64 build - upstream has shipped a release whose web image
+#      never built, and publishes releases slightly before images finish.
+#   3. Pin both Dockerfiles to it and set both add-on versions to match, on a
+#      branch.
+#   4. Run the full test workflow against that branch (arm64 build + smoke test).
+#   5. Tests pass: merge straight to main if the repo variable AUTO_MERGE is
+#      "true", otherwise open a PR for you to merge.
+#      Tests fail: open a draft PR flagged as failing, and never merge.
+#
+# Once it lands on main, Home Assistant offers the update (or installs it
+# itself, if you've switched on Auto update for the add-ons).
+name: Track upstream openGym releases
+
+on:
+  schedule:
+    - cron: "23 5 * * *" # daily, 05:23 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: upstream-bump
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      bump: ${{ steps.plan.outputs.bump }}
+      version: ${{ steps.plan.outputs.version }}
+      current: ${{ steps.plan.outputs.current }}
+      tag: ${{ steps.plan.outputs.tag }}
+      branch: ${{ steps.plan.outputs.branch }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Keep this schedule alive
+        # GitHub disables scheduled workflows in a repo with no commits for 60
+        # days - likely whenever upstream goes quiet. Re-enabling from inside
+        # each run resets that clock. Harmless if it's already enabled.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/upstream.yml/enable" || true
+
+      - name: Work out whether to bump
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          skip() { echo "$1"; echo "bump=false" >> "$GITHUB_OUTPUT"; exit 0; }
+
+          # Latest stable release. GitHub first; GitLab (upstream's CI mirror)
+          # if that fails - upstream's GitHub account has been suspended before.
+          tag=$(gh api repos/DuarteSantos8/openGym/releases/latest --jq .tag_name 2>/dev/null || true)
+          if [ -z "$tag" ]; then
+            tag=$(curl -fsS "https://gitlab.com/api/v4/projects/DuarteSantos8%2Fopengym/releases?per_page=20" \
+              | jq -r '[.[] | select(.tag_name | test("^v?[0-9]+\\.[0-9]+\\.[0-9]+$"))][0].tag_name // empty' || true)
+          fi
+          [ -n "$tag" ] || skip "::warning::couldn't read upstream's latest release"
+          latest="${tag#v}"
+          [[ "$latest" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || skip "::warning::ignoring non-release tag $tag"
+
+          current=$(sed -nE 's#^FROM registry\.gitlab\.com/duartesantos8/opengym/api:([^[:space:]]+).*#\1#p' opengym-api/Dockerfile)
+          echo "Pinned: $current   Upstream: $latest"
+          newest=$(printf '%s\n%s\n' "$current" "$latest" | sort -V | tail -n 1)
+          if [ "$latest" = "$current" ] || [ "$newest" != "$latest" ]; then
+            skip "Up to date."
+          fi
+
+          branch="upstream/opengym-$latest"
+          if git ls-remote --exit-code --heads origin "$branch" > /dev/null; then
+            skip "$branch already exists - openGym $latest is waiting on you."
+          fi
+
+          for img in api web; do
+            ref="registry.gitlab.com/duartesantos8/opengym/$img:$latest"
+            if ! docker buildx imagetools inspect "$ref" > "/tmp/$img.txt" 2>&1; then
+              skip "::notice::$ref isn't published yet - retrying on the next run"
+            fi
+            grep -q 'linux/arm64' "/tmp/$img.txt" || skip "::warning::$ref has no linux/arm64 image - not bumping"
+          done
+
+          # Pin both images; give both add-ons upstream's version number, which
+          # is always newer to Home Assistant than any 1.x.y.N wrapper version.
+          sed -i -E "s#(registry\.gitlab\.com/duartesantos8/opengym/(api|web)):[^[:space:]]+#\1:$latest#" \
+            opengym-api/Dockerfile opengym-web/Dockerfile
+          sed -i -E "s#^version: \".*\"#version: \"$latest\"#" \
+            opengym-api/config.yaml opengym-web/config.yaml
+          git --no-pager diff
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git commit -am "openGym $current -> $latest"
+          git push origin "$branch"
+
+          {
+            echo "bump=true"
+            echo "version=$latest"
+            echo "current=$current"
+            echo "tag=$tag"
+            echo "branch=$branch"
+          } >> "$GITHUB_OUTPUT"
+
+  test:
+    needs: check
+    if: needs.check.outputs.bump == 'true'
+    uses: ./.github/workflows/test.yml
+    with:
+      ref: ${{ needs.check.outputs.branch }}
+
+  ship:
+    needs: [check, test]
+    if: needs.check.outputs.bump == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Merge, or open a PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AUTO_MERGE: ${{ vars.AUTO_MERGE }}
+          VERSION: ${{ needs.check.outputs.version }}
+          CURRENT: ${{ needs.check.outputs.current }}
+          TAG: ${{ needs.check.outputs.tag }}
+          BRANCH: ${{ needs.check.outputs.branch }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ "${AUTO_MERGE:-}" = "true" ]; then
+            git fetch origin "$BRANCH" main
+            git switch main
+            git merge --ff-only "origin/$BRANCH"
+            git push origin main
+            git push origin --delete "$BRANCH"
+            echo "::notice::openGym $VERSION is on main - Home Assistant will offer it as an update"
+            exit 0
+          fi
+
+          notes=$(gh api "repos/DuarteSantos8/openGym/releases/tags/$TAG" --jq .body 2>/dev/null | head -c 50000 || true)
+          {
+            echo "Moves both add-ons from openGym **$CURRENT** to **$VERSION**."
+            echo
+            echo "- Both images are published with a \`linux/arm64\` build"
+            echo "- Both add-ons build on arm64 and pass the smoke test ([run]($RUN_URL))"
+            echo
+            echo "Merge this and Home Assistant will offer the update. Before updating,"
+            echo "check the notes below for changed settings or deployment steps."
+            echo
+            echo "<details><summary>Upstream release notes</summary>"
+            echo
+            echo "${notes:-_Release notes unavailable - see https://github.com/DuarteSantos8/openGym/releases_}"
+            echo
+            echo "</details>"
+          } > /tmp/body.md
+          gh pr create --base main --head "$BRANCH" --title "openGym $VERSION" --body-file /tmp/body.md
+
+  flag-failure:
+    needs: [check, test]
+    if: failure() && needs.check.outputs.bump == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Open a draft PR marked as failing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.check.outputs.version }}
+          BRANCH: ${{ needs.check.outputs.branch }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          {
+            echo "openGym **$VERSION** is out, but the add-ons **failed** the smoke test against it."
+            echo "Nothing was merged. See the [run]($RUN_URL) - the add-on logs are at the"
+            echo "bottom of the smoke job. Upstream has most likely changed something the"
+            echo "run.sh scripts depend on."
+          } > /tmp/body.md
+          gh pr create --draft --base main --head "$BRANCH" \
+            --title "openGym $VERSION - smoke test FAILED, do not merge" --body-file /tmp/body.md
