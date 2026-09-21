@@ -7,8 +7,6 @@ arch:
   - aarch64
   - amd64
 init: false
-startup: application
-boot: auto
 # /share is HA's shared folder, visible over the Samba add-on as \\<pi>\share.
 # Only used when mcp_export is on.
 map:

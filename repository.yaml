@@ -2,5 +2,5 @@
 # Add this repo's URL under Settings -> Add-ons -> Add-on Store ->
 # top-right menu -> Repositories.
 name: openGym for Home Assistant
-url: https://github.com/tcoombes/ha-opengym
+url: https://github.com/YOUR-GITHUB-USER/opengym-ha
 maintainer: Tom
