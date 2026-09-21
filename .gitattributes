@@ -1,0 +1,8 @@
+# Home Assistant builds these on Linux. A CRLF on the shebang line of run.sh
+# fails with a baffling "/run.sh: not found", so force LF whatever the
+# committer's platform.
+*.sh    text eol=lf
+*.mjs   text eol=lf
+*.yaml  text eol=lf
+*.yml   text eol=lf
+Dockerfile text eol=lf

@@ -1,0 +1,31 @@
+name: openGym Web
+version: "1.3.2.4"
+slug: opengym_web
+description: openGym frontend - serves the PWA and proxies /api to the API add-on
+url: https://gitlab.com/DuarteSantos8/opengym
+arch:
+  - aarch64
+  - amd64
+init: false
+startup: application
+boot: auto
+ports:
+  80/tcp: 8080
+ports_description:
+  80/tcp: openGym web UI - point your nginx vhost at this port
+# The exercise media is ~140 MB and re-downloads automatically after a
+# restore, so there's no point carrying it in every Home Assistant backup.
+backup_exclude:
+  - "media"
+  - "media/*"
+webui: "http://[HOST]:[PORT:80]"
+options:
+  api_port: 3000
+  persist_media: true
+  fetch_media: true
+schema:
+  # Leave unset: derived automatically from where the add-ons were installed.
+  api_host: str?
+  api_port: port
+  persist_media: bool
+  fetch_media: bool
