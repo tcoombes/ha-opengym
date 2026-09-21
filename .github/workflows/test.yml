@@ -1,0 +1,83 @@
+# Proves the add-ons still work against the pinned openGym images: lints the
+# add-on configs, then builds both add-ons natively on arm64 (the Pi's
+# architecture) and runs them the way Supervisor would, checking that a request
+# travels web -> nginx -> API and comes back healthy.
+#
+# This is the check that catches upstream changing something our run.sh
+# scripts depend on (start command, nginx template variables, paths) before it
+# ever reaches Home Assistant.
+name: Test add-ons
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: Branch or SHA to test
+        type: string
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        addon: [opengym-api, opengym-web]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - name: Lint add-on config
+        uses: frenck/action-addon-linter@v2
+        with:
+          path: ./${{ matrix.addon }}
+
+  smoke:
+    # Native arm64 runner: same architecture as the Pi 5, no emulation.
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Build both add-ons
+        run: |
+          docker build -t og-api ./opengym-api
+          docker build -t og-web ./opengym-web
+
+      - name: Start them the way Supervisor would
+        run: |
+          mkdir -p ci/api ci/web
+          # Supervisor writes each add-on's options to /data/options.json.
+          printf '%s' '{"rp_id":"localhost","origin":"http://localhost:8080","rp_name":"openGym CI","api_port":3000,"extra_env":[]}' > ci/api/options.json
+          # api_host set explicitly: CI containers don't get add-on hostnames.
+          # fetch_media off: no need to pull 140 MB of images to prove the wiring.
+          printf '%s' '{"api_host":"og-api","api_port":3000,"persist_media":true,"fetch_media":false}' > ci/web/options.json
+          docker network create og
+          docker run -d --name og-api --network og -v "$PWD/ci/api:/data" og-api
+          docker run -d --name og-web --network og -p 8080:80 -v "$PWD/ci/web:/data" og-web
+
+      - name: Health check through the web add-on's proxy
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:8080/api/health 2>/dev/null | tee /tmp/health.json | grep -q '"ok":true'; then
+              echo; echo "Healthy: $(cat /tmp/health.json)"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::openGym didn't come up healthy through the web add-on"
+          exit 1
+
+      - name: Add-on logs
+        if: always()
+        run: |
+          echo "----- openGym API -----"; docker logs og-api 2>&1 | tail -n 80
+          echo "----- openGym Web -----"; docker logs og-web 2>&1 | tail -n 80
