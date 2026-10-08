@@ -5,7 +5,7 @@
 #
 # Bump the tag here AND the `version:` in config.yaml when you update, then
 # rebuild the add-on so Supervisor pulls the new base layer.
-FROM registry.gitlab.com/duartesantos8/opengym/api:1.3.9
+FROM registry.gitlab.com/duartesantos8/opengym/api:1.3.10
 
 COPY run.sh /run.sh
 COPY mcp-export.mjs /mcp-export.mjs
