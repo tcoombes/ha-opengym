@@ -1,5 +1,5 @@
 name: openGym Web
-version: "1.3.10"
+version: "1.4.1"
 slug: opengym_web
 description: openGym frontend - serves the PWA and proxies /api to the API add-on
 url: https://gitlab.com/DuarteSantos8/opengym
