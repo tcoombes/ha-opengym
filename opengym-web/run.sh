@@ -101,6 +101,10 @@ fi
 # nginx image's 20-envsubst-on-templates.sh fills those in AFTER this script
 # runs - so the fix is to override the variables, not the text. BACKEND is set
 # explicitly; the loop catches any other variable the image sets to plain "api".
+# Pin the port nginx listens on to match this add-on's `ports:` mapping. The
+# image still defaults NGINX_PORT to 80, but 1.4.1 started advertising 8080
+# (EXPOSE), so don't inherit a default that may move under us.
+export NGINX_PORT=80
 export BACKEND="$API_HOST"
 log "env BACKEND -> $BACKEND"
 for kv in $(env | grep -E '^[A-Za-z_][A-Za-z0-9_]*=api$'); do

@@ -168,6 +168,12 @@ anyone signs up.
 
 **`www` counts as a different hostname.** Don't let the proxy serve both.
 
+**The web add-on runs as root, upstream's image doesn't.** Since openGym 1.4.1
+the web image runs as uid 101. The add-on puts it back to root, because
+`run.sh` rewrites nginx's config and writes the exercise media into `/data`,
+which Supervisor owns as root. That's normal for a Home Assistant add-on, but
+it does give up a hardening step upstream added.
+
 **Never uninstall the API add-on to force a refresh.** Uninstalling deletes its
 `/data` - every profile, passkey and workout. Restore from a Home Assistant
 backup if it happens.
