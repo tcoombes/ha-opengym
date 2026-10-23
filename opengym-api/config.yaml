@@ -1,5 +1,5 @@
 name: openGym API
-version: "1.4.1"
+version: "1.4.2"
 slug: opengym_api
 description: openGym backend - profiles, passkeys, workout history
 url: https://gitlab.com/DuarteSantos8/opengym

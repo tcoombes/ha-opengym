@@ -2,7 +2,7 @@
 #
 # Keep this tag in step with the API add-on - running mismatched api/web
 # versions is the fastest way to a confusing bug.
-FROM registry.gitlab.com/duartesantos8/opengym/web:1.4.1
+FROM registry.gitlab.com/duartesantos8/opengym/web:1.4.2
 
 # openGym 1.4.1 switched this image to a non-root user (uid 101), so apk needs
 # root - and so does run.sh at runtime: it rewrites nginx's config, and writes
